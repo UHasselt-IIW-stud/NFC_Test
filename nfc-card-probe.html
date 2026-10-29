@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Student Card NFC Probe</title>
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Semi+Condensed:wght@600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one phone-width column, read top to bottom like a bench instrument:
+   checks → scan control → last-read display → per-card verdicts → event log → export → notes */
+:root {
+  --bg: #EDF0F3;
+  --surface: #FFFFFF;
+  --ink: #16212C;
+  --muted: #5A6775;
+  --line: #D4DBE2;
+  --accent: #1D5BB8;
+  --accent-ink: #FFFFFF;
+  --accent-soft: #E1EAF8;
+  --ok: #1C7347;
+  --ok-soft: #E0F0E7;
+  --warn: #965410;
+  --warn-soft: #F6EADB;
+  --err: #A82B22;
+  --err-soft: #F8E2DF;
+  --f-display: "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --f-body: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E141A; --surface: #161F27; --ink: #E4EAF0; --muted: #94A2AF; --line: #28343F;
+    --accent: #7AA7EE; --accent-ink: #0E141A; --accent-soft: #1C2C44;
+    --ok: #62C38F; --ok-soft: #173226; --warn: #E3A55E; --warn-soft: #382A1A;
+    --err: #F08A80; --err-soft: #3A1E1C;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E141A; --surface: #161F27; --ink: #E4EAF0; --muted: #94A2AF; --line: #28343F;
+  --accent: #7AA7EE; --accent-ink: #0E141A; --accent-soft: #1C2C44;
+  --ok: #62C38F; --ok-soft: #173226; --warn: #E3A55E; --warn-soft: #382A1A;
+  --err: #F08A80; --err-soft: #3A1E1C;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 16px;
+  line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: calc(20px + env(safe-area-inset-top, 0px)) calc(40px + env(safe-area-inset-bottom, 0px));
+}
+[hidden] { display: none !important; }
+.wrap { max-width: 640px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
+
+.eyebrow {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+header { display: flex; flex-direction: column; gap: 6px; }
+h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: 1.9rem;
+  line-height: 1.05;
+  letter-spacing: 0.005em;
+  margin: 0;
+  text-wrap: balance;
+}
+header p { margin: 4px 0 0; color: var(--muted); max-width: 60ch; }
+
+section { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* Environment checks */
+.checks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.check {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 10px 12px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--line);
+  min-width: 0;
+}
+.check b { display: block; font-weight: 600; font-size: 0.92rem; }
+.check span { display: block; color: var(--muted); font-size: 0.82rem; overflow-wrap: anywhere; }
+.dot { width: 10px; height: 10px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--line); }
+.check[data-tone="ok"] .dot { background: var(--ok); }
+.check[data-tone="warn"] .dot { background: var(--warn); }
+.check[data-tone="err"] .dot { background: var(--err); }
+.check[data-tone="neutral"] .dot { background: var(--muted); }
+.hint {
+  margin: 0; padding: 12px 14px; border-radius: 10px;
+  background: var(--err-soft); color: var(--err); font-size: 0.93rem;
+}
+
+/* Scan control */
+.label-row { display: flex; gap: 8px; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 0.85rem; color: var(--muted); flex: 1; min-width: 0; }
+input[type="text"] {
+  font: inherit; font-size: 1rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; width: 100%;
+}
+button { font: inherit; }
+input:focus-visible, button:focus-visible, summary:focus-visible, textarea:focus-visible {
+  outline: 3px solid var(--accent); outline-offset: 2px;
+}
+.btn {
+  font-weight: 600; font-size: 0.95rem;
+  padding: 10px 14px; min-height: 44px;
+  border-radius: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover { border-color: var(--muted); }
+.btn[data-armed] { border-color: var(--err); color: var(--err); }
+.btn-scan {
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  width: 100%; min-height: 60px;
+  border: 0; border-radius: 12px;
+  background: var(--accent); color: var(--accent-ink);
+  font-family: var(--f-display); font-weight: 700; font-size: 1.2rem; letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.btn-scan[data-state="on"] { background: var(--ink); color: var(--surface); }
+.btn-scan:disabled { opacity: 0.45; cursor: not-allowed; }
+.pulse { width: 12px; height: 12px; border-radius: 50%; background: currentColor; flex: none; }
+.btn-scan[data-state="on"] .pulse { animation: pulse 1.4s ease-out infinite; }
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 currentColor; }
+  100% { box-shadow: 0 0 0 12px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn-scan[data-state="on"] .pulse { animation: none; }
+}
+.status { margin: 0; font-size: 0.93rem; color: var(--muted); min-height: 1.4em; }
+.status[data-tone="err"] { color: var(--err); }
+.status[data-tone="ok"] { color: var(--ok); }
+
+/* Last-read display */
+.readout { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.readout-head {
+  display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+  font-size: 0.88rem; color: var(--muted);
+}
+.readout-body { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.uid {
+  font-family: var(--f-mono); font-weight: 600;
+  font-size: clamp(1.2rem, 5.6vw, 1.75rem);
+  letter-spacing: 0.02em; line-height: 1.25;
+  overflow-wrap: anywhere; margin: 0;
+}
+.explain { margin: 0; font-size: 0.97rem; max-width: 62ch; }
+.pill {
+  display: inline-block;
+  font-family: var(--f-display); font-weight: 600;
+  font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; white-space: nowrap;
+  background: var(--bg); color: var(--muted); border: 1px solid var(--line);
+}
+.pill[data-tone="ok"] { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
+.pill[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.pill[data-tone="err"] { background: var(--err-soft); color: var(--err); border-color: transparent; }
+dl.kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; font-size: 0.9rem; }
+dl.kv dt { color: var(--muted); }
+dl.kv dd { margin: 0; font-family: var(--f-mono); font-size: 0.84rem; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; padding-top: 1px; }
+.records { display: flex; flex-direction: column; gap: 6px; }
+.records ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.records li { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 0.9rem; }
+.records code { font-family: var(--f-mono); font-size: 0.82rem; overflow-wrap: anywhere; min-width: 0; }
+.empty { margin: 0; color: var(--muted); font-size: 0.95rem; }
+
+/* Per-card summary */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.tablewrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+th {
+  text-align: left; font-family: var(--f-display); font-weight: 600;
+  font-size: 0.76rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted);
+  padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+td .uids { display: flex; flex-direction: column; gap: 2px; font-family: var(--f-mono); font-size: 0.8rem; }
+.panel .empty { padding: 16px 14px; }
+
+/* Event log */
+ol.log { list-style: none; margin: 0; padding: 0; }
+ol.log li {
+  display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line);
+}
+ol.log li:last-child { border-bottom: 0; }
+.time { font-family: var(--f-mono); font-size: 0.78rem; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 2px; }
+.ev-title { font-family: var(--f-mono); font-size: 0.88rem; font-weight: 600; overflow-wrap: anywhere; }
+.ev-sub { font-size: 0.84rem; color: var(--muted); }
+ol.log li[data-kind="error"] .ev-title { color: var(--err); font-family: var(--f-body); }
+
+/* Export */
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+details { font-size: 0.9rem; }
+summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+textarea {
+  width: 100%; min-height: 130px; margin-top: 8px;
+  font-family: var(--f-mono); font-size: 0.76rem; line-height: 1.4;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+  resize: vertical;
+}
+
+/* Notes */
+.notes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.notes li { max-width: 62ch; font-size: 0.95rem; }
+.notes b { font-weight: 600; }
+
+@media (max-width: 380px) {
+  .checks { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<main class="wrap">
+
+  <header>
+    <p class="eyebrow">Lab entry app · Web NFC test</p>
+    <h1>Student Card NFC Probe</h1>
+    <p>Tap a student card to see what Chrome on Android can read from it: the card's UID and any NDEF data on it. This page only reads. It never writes to a card.</p>
+  </header>
+
+  <section aria-labelledby="h-checks">
+    <h2 class="eyebrow" id="h-checks">This phone and page</h2>
+    <div class="checks">
+      <div class="check" id="chk-api" data-tone="neutral"><i class="dot"></i><div><b>Web NFC</b><span>Checking…</span></div></div>
+      <div class="check" id="chk-secure" data-tone="neutral"><i class="dot"></i><div><b>Secure page</b><span>Checking…</span></div></div>
+      <div class="check" id="chk-top" data-tone="neutral"><i class="dot"></i><div><b>Own tab</b><span>Checking…</span></div></div>
+      <div class="check" id="chk-perm" data-tone="neutral"><i class="dot"></i><div><b>NFC permission</b><span>Asked when you start scanning</span></div></div>
+    </div>
+    <p class="hint" id="hint" hidden></p>
+  </section>
+
+  <section aria-labelledby="h-scan">
+    <h2 class="eyebrow" id="h-scan">Scan</h2>
+    <div class="label-row">
+      <label class="field" for="label">Card being tested
+        <input id="label" type="text" autocomplete="off" placeholder="e.g. My student card">
+      </label>
+      <button class="btn" id="btn-next" type="button">Next card</button>
+    </div>
+    <button id="btn-scan" class="btn-scan" type="button" data-state="off"><i class="pulse" aria-hidden="true"></i><span class="btn-text">Start scanning</span></button>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </section>
+
+  <section aria-labelledby="h-latest">
+    <h2 class="eyebrow" id="h-latest">Last read</h2>
+    <div class="readout">
+      <div class="readout-head"><span id="latest-meta">No card read yet</span><span class="pill" id="latest-pill" data-tone="neutral">Waiting</span></div>
+      <div class="readout-body" id="latest-body">
+        <p class="empty">Press <b>Start scanning</b>, then hold a card flat against the back of the phone for a second. Its UID appears here.</p>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="h-summary">
+    <h2 class="eyebrow" id="h-summary">Result per card</h2>
+    <div class="panel" id="summary"></div>
+  </section>
+
+  <section aria-labelledby="h-log">
+    <h2 class="eyebrow" id="h-log">Every tap</h2>
+    <div class="panel"><ol class="log" id="log"></ol></div>
+  </section>
+
+  <section aria-labelledby="h-export">
+    <h2 class="eyebrow" id="h-export">Keep the results</h2>
+    <div class="actions">
+      <button class="btn" id="btn-copy" type="button">Copy as CSV</button>
+      <button class="btn" id="btn-json" type="button">Download JSON</button>
+      <button class="btn" id="btn-clear" type="button">Clear log</button>
+    </div>
+    <p class="status" id="export-status" role="status" aria-live="polite"></p>
+    <details id="export-details">
+      <summary>Show CSV</summary>
+      <textarea id="export-text" readonly aria-label="Results as CSV"></textarea>
+    </details>
+  </section>
+
+  <section aria-labelledby="h-notes">
+    <h2 class="eyebrow" id="h-notes">What the results mean</h2>
+    <ul class="notes">
+      <li><b>Same UID on every tap:</b> Chrome can identify this card, so the lab app can use Web NFC. The UID identifies the card, not the student; the app links the two through the QR record.</li>
+      <li><b>Card not readable:</b> Chrome found the card but refuses it because it is not NDEF-compatible, and it gives no UID in that case. A native app, Power Apps or a USB reader can usually still read the UID.</li>
+      <li><b>UID changes between taps:</b> the card makes up a random UID for privacy. No reader can use that UID to recognise the card.</li>
+      <li><b>Start with a control tag:</b> scan a plain NFC sticker or tag first, if you have one. If that fails too, the problem is the phone or the page, not the student card.</li>
+      <li><b>Test several cards:</b> cards issued in different years may use different chips. Web NFC never reads protected data on a card, such as the files a door-access system uses.</li>
+    </ul>
+  </section>
+
+</main>
+
+<script>
+"use strict";
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const LOG_KEY = "nfc-card-probe:log:v1";
+  const LABEL_KEY = "nfc-card-probe:label:v1";
+  // First UID byte of 7- and 10-byte ISO 14443-A UIDs = IC manufacturer (ISO/IEC 7816-6).
+  const MANUFACTURERS = { 0x01: "Motorola", 0x02: "STMicroelectronics", 0x04: "NXP", 0x05: "Infineon", 0x07: "Texas Instruments", 0x16: "EM Microelectronic" };
+
+  let events = load(LOG_KEY, []);
+  if (!Array.isArray(events)) events = [];
+  let reader = null, ctrl = null, scanning = false, ready = false, wakeLock = null, permWatched = false, clearTimer = null;
+
+  function load(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
+  function store(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } }
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+  function clock(t) { try { return new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }); } catch (e) { return t; } }
+
+  /* ---------- UID handling ---------- */
+  function parseSerial(s) {
+    if (!s) return [];
+    const parts = String(s).trim().split(/[:\-\s]+/).filter(Boolean);
+    const bytes = parts.map((p) => parseInt(p, 16));
+    return bytes.some((b) => isNaN(b) || b < 0 || b > 255) ? [] : bytes;
+  }
+  function hex(bytes) { return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":"); }
+  function dec(bytes) { let v = 0n; for (const b of bytes) v = (v << 8n) | BigInt(b); return v.toString(); }
+  function interpret(bytes) {
+    const n = bytes.length;
+    if (n === 0) return { tone: "err", short: "No UID", text: "Chrome read the card but reported no serial number, so this card cannot be identified in Chrome." };
+    if (n === 4) {
+      if (bytes[0] === 0x08) return { tone: "warn", short: "Random UID", text: "A 4-byte UID starting with 08 is a random ID: the card makes up a new one at every tap. Tap again to confirm. If it changes, the UID cannot identify a student." };
+      if ((bytes[0] & 0x0f) === 0x0f) return { tone: "warn", short: "Non-unique ID", text: "A 4-byte UID ending its first byte in F is a fixed but non-unique ID (NUID). Two cards could share it." };
+      return { tone: "neutral", short: "4-byte UID", text: "A fixed 4-byte UID, common on older MIFARE Classic cards. It works as an identifier, but 4-byte UIDs are not guaranteed unique between cards." };
+    }
+    if (n === 7 || n === 10) {
+      const m = MANUFACTURERS[bytes[0]];
+      return { tone: "ok", short: n + "-byte UID", text: (n === 7 ? "A 7-byte" : "A 10-byte") + " UID" + (m ? ", chip made by " + m : "") + ". Unique per chip. Tap a few more times to check it stays the same." };
+    }
+    return { tone: "neutral", short: n + "-byte ID", text: "An unusual ID length. The card may not be an ISO 14443-A card." };
+  }
+
+  /* ---------- NDEF records ---------- */
+  function bytesOf(dv) { return dv ? new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength) : new Uint8Array(0); }
+  function decodeRecord(r) {
+    const raw = bytesOf(r.data);
+    const textual = r.recordType === "text" || r.recordType === "url" || r.recordType === "absolute-url" ||
+      (r.mediaType && /^(text\/|application\/(json|xml))/.test(r.mediaType));
+    let value = "";
+    if (textual && raw.length) {
+      try { value = new TextDecoder(r.recordType === "text" ? (r.encoding || "utf-8") : "utf-8").decode(raw); } catch (e) { value = ""; }
+    }
+    if (!value) value = raw.length ? hex(Array.from(raw.slice(0, 64))) + (raw.length > 64 ? " … (" + raw.length + " bytes)" : "") : "(empty)";
+    return { recordType: r.recordType || "", mediaType: r.mediaType || "", id: r.id || "", lang: r.lang || "", bytes: raw.length, value: value };
+  }
+
+  /* ---------- Environment checks ---------- */
+  function setCheck(id, tone, text) {
+    const el = $(id);
+    el.dataset.tone = tone;
+    el.querySelector("span").textContent = text;
+  }
+  async function refreshPermission() {
+    if (!navigator.permissions || !navigator.permissions.query) return;
+    try {
+      const st = await navigator.permissions.query({ name: "nfc" });
+      const map = { granted: ["ok", "Allowed"], prompt: ["neutral", "Chrome will ask when you start"], denied: ["err", "Blocked in Chrome's site settings"] };
+      const pair = map[st.state] || ["neutral", st.state];
+      setCheck("chk-perm", pair[0], pair[1]);
+      if (!permWatched) { permWatched = true; st.onchange = () => refreshPermission(); }
+    } catch (e) { /* "nfc" not a known permission in this browser */ }
+  }
+  function runChecks() {
+    const hasApi = "NDEFReader" in window;
+    const secure = window.isSecureContext;
+    let top = true;
+    try { top = window.self === window.top; } catch (e) { top = false; }
+    const android = /Android/i.test(navigator.userAgent);
+
+    setCheck("chk-api", hasApi ? "ok" : "err", hasApi ? "Available in this browser" : "Not in this browser");
+    setCheck("chk-secure", secure ? "ok" : "err", secure ? "https:// or localhost" : "Needs https:// or localhost");
+    setCheck("chk-top", top ? "ok" : "err", top ? "Opened directly" : "Inside a frame");
+
+    const problems = [];
+    if (!secure) problems.push("Web NFC only works on pages served over https:// or from localhost. Open this page from such an address.");
+    else if (!hasApi) problems.push(android ? "This browser has no Web NFC. Open the page in Chrome for Android." : "Web NFC only exists in Chrome on Android. Open this page on an Android phone in Chrome.");
+    if (!top) problems.push("Chrome blocks Web NFC inside frames. Open the page in its own tab.");
+    const hint = $("hint");
+    hint.hidden = problems.length === 0;
+    hint.textContent = problems.join(" ");
+    ready = problems.length === 0;
+    $("btn-scan").disabled = !ready;
+    refreshPermission();
+  }
+
+  /* ---------- Scanning ---------- */
+  function setStatus(tone, text) { const s = $("status"); s.dataset.tone = tone; s.textContent = text; }
+  function setScanning(state) {
+    const b = $("btn-scan"), t = b.querySelector(".btn-text");
+    if (state === "starting") {
+      b.dataset.state = "starting"; b.disabled = true; t.textContent = "Starting…";
+      setStatus("neutral", "Waiting for Chrome. Allow NFC if it asks.");
+    } else if (state === true) {
+      scanning = true; b.dataset.state = "on"; b.disabled = false; t.textContent = "Stop scanning";
+      setStatus("neutral", "Scanning. Hold the card flat against the back of the phone and keep it still for a second.");
+    } else {
+      scanning = false; b.dataset.state = "off"; b.disabled = !ready; t.textContent = "Start scanning";
+    }
+  }
+  function explain(err) {
+    switch (err && err.name) {
+      case "NotAllowedError": return "NFC permission was refused. Tap the icon left of the address, open Permissions, allow NFC, then try again.";
+      case "NotSupportedError": return "This phone has no NFC reader that Chrome can use.";
+      case "NotReadableError": return "NFC is switched off or busy. Turn on NFC in Android settings, then try again.";
+      case "AbortError": return "Scanning stopped.";
+      default: return ((err && err.name) || "Error") + ": " + ((err && err.message) || "scanning could not start.");
+    }
+  }
+  async function start() {
+    stop(true);
+    let r;
+    try { r = new NDEFReader(); } catch (e) { setStatus("err", explain(e)); return; }
+    const c = new AbortController();
+    r.onreading = onRead;
+    r.onreadingerror = onReadError;
+    reader = r; ctrl = c;
+    setScanning("starting");
+    try {
+      await r.scan({ signal: c.signal });
+      if (ctrl !== c) return; // stopped meanwhile
+      setScanning(true);
+      requestWake();
+    } catch (err) {
+      if (ctrl === c) { reader = null; ctrl = null; }
+      setScanning(false);
+      setStatus("err", explain(err));
+    }
+    refreshPermission();
+  }
+  function stop(silent) {
+    if (reader) { reader.onreading = null; reader.onreadingerror = null; }
+    if (ctrl) { try { ctrl.abort(); } catch (e) { /* ignore */ } }
+    reader = null; ctrl = null;
+    releaseWake();
+    if (!silent) { setScanning(false); setStatus("neutral", "Scanning stopped."); }
+  }
+  async function requestWake() {
+    try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) { wakeLock = null; }
+  }
+  function releaseWake() { try { if (wakeLock) wakeLock.release(); } catch (e) { /* ignore */ } wakeLock = null; }
+  function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch (e) { /* ignore */ } }
+
+  function onRead(e) {
+    const records = Array.from((e.message && e.message.records) || []).map(decodeRecord);
+    addEvent({ kind: "read", serial: e.serialNumber || "", records: records });
+    buzz(60);
+    setStatus("ok", "Card read. Tap it again to check the UID stays the same.");
+  }
+  function onReadError() {
+    addEvent({ kind: "error", serial: "", records: [] });
+    buzz([40, 60, 40]);
+    setStatus("err", "Chrome found a card but could not read it.");
+  }
+  function currentLabel() { return $("label").value.trim() || "Unlabelled card"; }
+  function addEvent(ev) {
+    ev.t = new Date().toISOString();
+    ev.label = currentLabel();
+    events.push(ev);
+    if (events.length > 500) events = events.slice(-500);
+    store(LOG_KEY, events);
+    render();
+  }
+
+  /* ---------- Rendering ---------- */
+  function renderLatest() {
+    const last = events[events.length - 1];
+    const pill = $("latest-pill"), meta = $("latest-meta"), body = $("latest-body");
+    if (!last) {
+      pill.dataset.tone = "neutral"; pill.textContent = "Waiting";
+      meta.textContent = "No card read yet";
+      body.innerHTML = '<p class="empty">Press <b>Start scanning</b>, then hold a card flat against the back of the phone for a second. Its UID appears here.</p>';
+      return;
+    }
+    meta.textContent = last.label + " · " + clock(last.t);
+    if (last.kind === "error") {
+      pill.dataset.tone = "err"; pill.textContent = "Not readable";
+      body.innerHTML = '<p class="uid">—</p><p class="explain">Chrome detected a card but refused it because it is not NDEF-compatible. Chrome gives no UID in that case. Try once more, holding the card still; if it fails again, Web NFC cannot use this card.</p>';
+      return;
+    }
+    const bytes = parseSerial(last.serial);
+    const info = interpret(bytes);
+    pill.dataset.tone = info.tone; pill.textContent = info.short;
+    let html = '<p class="uid">' + esc(bytes.length ? hex(bytes) : "—") + "</p>";
+    html += '<p class="explain">' + esc(info.text) + "</p>";
+    html += '<dl class="kv">';
+    if (bytes.length) {
+      html += "<dt>Length</dt><dd>" + bytes.length + " bytes</dd>";
+      html += "<dt>Decimal</dt><dd>" + dec(bytes) + "</dd>";
+      html += "<dt>Decimal, bytes reversed</dt><dd>" + dec(bytes.slice().reverse()) + "</dd>";
+    }
+    html += "<dt>As Chrome reports it</dt><dd>" + esc(last.serial || "(empty)") + "</dd>";
+    html += "<dt>NDEF records</dt><dd>" + (last.records.length ? last.records.length : "0 (normal for ID cards)") + "</dd>";
+    html += "</dl>";
+    if (last.records.length) {
+      html += '<div class="records"><p class="eyebrow">NDEF content</p><ol>';
+      for (const r of last.records) {
+        html += '<li><span class="pill">' + esc(r.recordType + (r.mediaType ? " · " + r.mediaType : "")) + "</span><code>" + esc(r.value) + "</code></li>";
+      }
+      html += "</ol></div>";
+    }
+    body.innerHTML = html;
+  }
+
+  function groups() {
+    const map = new Map();
+    for (const ev of events) {
+      let g = map.get(ev.label);
+      if (!g) { g = { label: ev.label, reads: 0, errors: 0, uids: new Map() }; map.set(ev.label, g); }
+      if (ev.kind === "read") {
+        g.reads++;
+        const b = parseSerial(ev.serial);
+        const k = b.length ? hex(b) : "(no UID)";
+        g.uids.set(k, (g.uids.get(k) || 0) + 1);
+      } else g.errors++;
+    }
+    return Array.from(map.values());
+  }
+  function verdict(g) {
+    if (g.reads === 0) return ["err", "Not readable in Chrome"];
+    if (g.uids.size > 1) return ["warn", "UID changed between taps"];
+    const only = Array.from(g.uids.keys())[0];
+    if (only === "(no UID)") return ["err", "No UID reported"];
+    if (g.reads < 3) { const left = 3 - g.reads; return ["neutral", "Tap " + left + " more time" + (left > 1 ? "s" : "") + " to confirm"]; }
+    return ["ok", "Same UID every tap"];
+  }
+  function renderSummary() {
+    const gs = groups();
+    const el = $("summary");
+    if (!gs.length) { el.innerHTML = '<p class="empty">Each card you test gets a verdict here. Tap every card three or more times, changing the name above between cards.</p>'; return; }
+    let html = '<div class="tablewrap"><table><thead><tr><th>Card</th><th>Reads</th><th>Failed</th><th>UIDs seen</th><th>Result</th></tr></thead><tbody>';
+    for (const g of gs) {
+      const v = verdict(g);
+      const uids = Array.from(g.uids.entries()).map(([k, n]) => "<span>" + esc(k) + (g.uids.size > 1 || n > 1 ? " ×" + n : "") + "</span>").join("");
+      html += "<tr><td>" + esc(g.label) + '</td><td class="num">' + g.reads + '</td><td class="num">' + g.errors + '</td><td><div class="uids">' + (uids || "—") + '</div></td><td><span class="pill" data-tone="' + v[0] + '">' + esc(v[1]) + "</span></td></tr>";
+    }
+    html += "</tbody></table></div>";
+    el.innerHTML = html;
+  }
+  function renderLog() {
+    const el = $("log");
+    if (!events.length) { el.innerHTML = '<li><span class="time">—</span><div class="ev-sub">No taps yet.</div></li>'; return; }
+    let html = "";
+    const list = events.slice(-80).reverse();
+    for (const ev of list) {
+      if (ev.kind === "read") {
+        const b = parseSerial(ev.serial);
+        html += '<li data-kind="read"><span class="time">' + esc(clock(ev.t)) + '</span><div><div class="ev-title">' + esc(b.length ? hex(b) : "(no UID)") + '</div><div class="ev-sub">' + esc(ev.label) + " · " + (b.length ? b.length + " bytes" : "no serial") + " · " + ev.records.length + " NDEF record" + (ev.records.length === 1 ? "" : "s") + "</div></div></li>";
+      } else {
+        html += '<li data-kind="error"><span class="time">' + esc(clock(ev.t)) + '</span><div><div class="ev-title">Card not readable</div><div class="ev-sub">' + esc(ev.label) + "</div></div></li>";
+      }
+    }
+    el.innerHTML = html;
+  }
+
+  /* ---------- Export ---------- */
+  function csvCell(v) { const s = String(v == null ? "" : v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+  function toCSV() {
+    const head = ["time", "card_label", "event", "uid_hex", "uid_bytes", "uid_decimal", "uid_decimal_reversed", "interpretation", "ndef_records", "ndef_content"];
+    const rows = events.map((ev) => {
+      const b = parseSerial(ev.serial);
+      const info = ev.kind === "read" ? interpret(b) : null;
+      return [ev.t, ev.label, ev.kind === "read" ? "read" : "not_readable",
+        b.length ? hex(b) : "", b.length || "", b.length ? dec(b) : "", b.length ? dec(b.slice().reverse()) : "",
+        info ? info.short : "", (ev.records || []).length,
+        (ev.records || []).map((r) => r.recordType + (r.mediaType ? "(" + r.mediaType + ")" : "") + ": " + r.value).join(" | ")];
+    });
+    return [head].concat(rows).map((r) => r.map(csvCell).join(",")).join("\n");
+  }
+  function renderExport() { $("export-text").value = toCSV(); }
+  function exportStatus(text) { $("export-status").textContent = text; }
+
+  function render() { renderLatest(); renderSummary(); renderLog(); renderExport(); }
+
+  /* ---------- Wiring ---------- */
+  $("label").value = load(LABEL_KEY, "Card 1") || "Card 1";
+  $("label").addEventListener("input", () => store(LABEL_KEY, $("label").value));
+  $("btn-next").addEventListener("click", () => {
+    const v = $("label").value.trim();
+    const m = v.match(/^(.*?)(\d+)$/);
+    $("label").value = m ? m[1] + (parseInt(m[2], 10) + 1) : (v ? v + " 2" : "Card 1");
+    store(LABEL_KEY, $("label").value);
+  });
+  $("btn-scan").addEventListener("click", () => { if (scanning) stop(false); else start(); });
+
+  $("btn-copy").addEventListener("click", () => {
+    const text = toCSV();
+    const fallback = () => {
+      $("export-details").open = true;
+      const ta = $("export-text"); ta.value = text; ta.focus(); ta.select();
+      exportStatus("Copying was blocked. The CSV is selected below; copy it from there.");
+    };
+    try {
+      navigator.clipboard.writeText(text).then(() => exportStatus("CSV copied (" + events.length + " taps)."), fallback);
+    } catch (e) { fallback(); }
+  });
+  $("btn-json").addEventListener("click", () => {
+    try {
+      const blob = new Blob([JSON.stringify(events, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "nfc-card-probe-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".json";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      exportStatus("JSON downloaded.");
+    } catch (e) { exportStatus("Download failed: " + e.message); }
+  });
+  function disarm() { const b = $("btn-clear"); delete b.dataset.armed; b.textContent = "Clear log"; clearTimeout(clearTimer); }
+  $("btn-clear").addEventListener("click", () => {
+    const b = $("btn-clear");
+    if (b.dataset.armed) { events = []; store(LOG_KEY, events); render(); disarm(); exportStatus("Log cleared."); }
+    else { b.dataset.armed = "1"; b.textContent = "Tap again to clear"; clearTimer = setTimeout(disarm, 3000); }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && scanning) requestWake();
+  });
+
+  runChecks();
+  render();
+})();
+</script>
+</body>
+</html>
